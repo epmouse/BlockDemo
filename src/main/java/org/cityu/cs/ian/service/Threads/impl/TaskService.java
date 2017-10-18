@@ -21,29 +21,23 @@ import java.util.List;
 public class TaskService implements ITaskService {
     private volatile static boolean isInterrupt;
     public final static String BASENACL = "This is first block";
-    @Override
-    public String acceptTransations() {
-        return null;
-    }
 
     @Override
     @Async
     public void powCalculate() {
         final long naclTime = System.currentTimeMillis();//当前时间计算出来放入json，验证用
         int i = 0;
-        calculate(naclTime, i);
+        calculateByFor(BASENACL,i,naclTime);
     }
-    private void calculate(long startTime, int i) {
-        String currentStr = BASENACL + startTime + (++i);
-        if (!isInterrupt) {//接收block 先停止计算线程，验证失败继续计算，验证成功 直接销毁线程进行下一次计算
-            String hash = SHA256.getSHA256StrJava(currentStr);
-            if ("00000000".equals(hash.substring(0, 7))) {
-                saveAndPostBlock(i, startTime, hash, System.currentTimeMillis());
-            } else {
-                calculate(startTime, i);
-            }
+
+    public void calculateByFor(String hash,int i,long naclTime){
+        while (!"000".equals(hash.substring(0, 3))&&!isInterrupt) {
+            i++;
+            hash = SHA256.getSHA256StrJava(TaskService.BASENACL + naclTime + i);
         }
+        saveAndPostBlock(i, naclTime, hash, System.currentTimeMillis());
     }
+
 
     /**
      * 把计算完的区块添加到总链，并post出去
