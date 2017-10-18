@@ -3,23 +3,27 @@ package org.cityu.cs.ian.service.Threads.impl;
 import com.squareup.okhttp.Callback;
 import com.squareup.okhttp.Request;
 import com.squareup.okhttp.Response;
-import org.apache.commons.io.FileUtils;
+import org.cityu.cs.ian.model.IBlockModel;
 import org.cityu.cs.ian.model.bean.BlockBean;
 import org.cityu.cs.ian.model.bean.Transaction1;
 import org.cityu.cs.ian.service.Threads.ITaskService;
 import org.cityu.cs.ian.util.*;
 import org.cityu.cs.ian.util.PropertiesUtil;
 import org.cityu.cs.ian.util.merkle.MerkleTreeUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import java.io.File;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
 @Service
 public class TaskService implements ITaskService {
-    private volatile static boolean isInterrupt;
+    @Autowired
+    private IBlockModel blockModel;
+
+    public volatile static boolean isInterrupt;
     public final static String BASENACL = "This is first block";
 
     @Override
@@ -27,15 +31,20 @@ public class TaskService implements ITaskService {
     public void powCalculate() {
         final long naclTime = System.currentTimeMillis();//当前时间计算出来放入json，验证用
         int i = 0;
-        calculateByFor(BASENACL,i,naclTime);
+        calculateByFor(BASENACL, i, naclTime);
     }
 
-    public void calculateByFor(String hash,int i,long naclTime){
-        while (!"000".equals(hash.substring(0, 3))&&!isInterrupt) {
+    public void calculateByFor(String hash, int i, long naclTime) {
+        while (!"0000000".equals(hash.substring(0, 7)) && !isInterrupt) {
             i++;
             hash = SHA256.getSHA256StrJava(TaskService.BASENACL + naclTime + i);
         }
-        saveAndPostBlock(i, naclTime, hash, System.currentTimeMillis());
+        if (!isInterrupt) {
+            saveAndPostBlock(i, naclTime, hash, System.currentTimeMillis());
+        } else {
+            TransactonListOperatorUtils.getTransactionList();//清空transaction
+            powCalculate();//重新开始计算
+        }
     }
 
 
@@ -44,36 +53,13 @@ public class TaskService implements ITaskService {
      */
     private void saveAndPostBlock(int lastI, long startTime, String lastHash, long endTime) {
         String blockJson = assemblyBlock(lastI, startTime, lastHash, endTime);
-        saveBlockToLocal(blockJson);
-        postBlock(blockJson);
-        powCalculate();//新区块计算开始
-    }
-
-    /**
-     * 把区块存成文件保存到本地
-     * @param blockJson
-     */
-    public void saveBlockToLocal(String blockJson) {
-        String rootPath = getBlockPath();
-        File file = new File(rootPath + "/" + getCurrentBlockName());
-        try {
-            FileUtils.write(file,blockJson,"utf-8");
-
-        } catch (IOException e) {
-            e.printStackTrace();
+        boolean b = blockModel.saveBlockToLocal(blockJson);
+        if (b) {
+            postBlock(blockJson);
+            powCalculate();//新区块计算开始
+        }else {
+            System.out.println("TaskService中saveAndPostBlock（）方法文件写入失败，请查看异常");
         }
-    }
-
-    private String getBlockPath() {
-        return PropertiesUtil.readValue("config.properties","block.localPath");
-    }
-
-    /**
-     * 获取新区块文件名称  暂定使用区块高度命名
-     * @return
-     */
-    private int getCurrentBlockName() {
-        return getTotalBlockCount() + 1;
     }
 
     /**
@@ -89,10 +75,12 @@ public class TaskService implements ITaskService {
             HttpUtils.getInstance().postJsonByAsync(split[i], blockJson, new Callback() {
                 @Override
                 public void onFailure(Request request, IOException e) {
+                    //todo-多server发送，统计失败的server
                 }
+
                 @Override
                 public void onResponse(Response response) throws IOException {
-                    //多server发送，暂时不考虑返回值
+                    //todo-多server发送，统计成功的server
                 }
             });
         }
@@ -100,6 +88,7 @@ public class TaskService implements ITaskService {
 
     /**
      * 拼装区块
+     *
      * @param lastI
      * @param startTime
      * @param lastHash
@@ -110,7 +99,7 @@ public class TaskService implements ITaskService {
         BlockBean blockBean = new BlockBean();
         List<Transaction1> transactionList = TransactonListOperatorUtils.getTransactionList();
         blockBean.setTransactionCount(transactionList.size());
-        blockBean.setBlockHeight(getCurrentBlockName());
+        blockBean.setBlockHeight(blockModel.getCurrentBlockName());
         blockBean.setBlockHeader(getBlockHeader(transactionList, startTime, endTime, lastI, lastHash));
         blockBean.setTransaction1s(transactionList);
         return JsonUtil.toJson(blockBean);
@@ -118,13 +107,14 @@ public class TaskService implements ITaskService {
 
     /**
      * 组装blockhearder
+     *
      * @return
      */
-    private BlockBean.BlockHeaderBean  getBlockHeader(List<Transaction1> transactionList, long startTime, long endTime, int lastI, String lastHash) {
+    private BlockBean.BlockHeaderBean getBlockHeader(List<Transaction1> transactionList, long startTime, long endTime, int lastI, String lastHash) {
         BlockBean.BlockHeaderBean blockHeaderBean = new BlockBean.BlockHeaderBean();
-        blockHeaderBean.setPreviousHash(getTopBlockHash());
+        blockHeaderBean.setPreviousHash(blockModel.getTopBlockHash());
         ArrayList<String> transactionJsonList = new ArrayList<>();
-        for(Transaction1 transaction1:transactionList){
+        for (Transaction1 transaction1 : transactionList) {
             transactionJsonList.add(JsonUtil.toJson(transaction1));
         }
         blockHeaderBean.setMerkleRoot(MerkleTreeUtil.getRoot(transactionJsonList));
@@ -133,46 +123,5 @@ public class TaskService implements ITaskService {
         blockHeaderBean.setNonce(lastI + "");
         blockHeaderBean.setBlockHash(lastHash);
         return blockHeaderBean;
-    }
-
-    /**
-     * 获取当前链的最后一个区块的hash
-     *
-     * @return
-     */
-    private String getTopBlockHash() {
-        File file=null;
-        List<File> files = getAllBolckFiles();
-        if(files!=null&files.size()>0){
-           file = files.get(files.size() - 1);
-        }
-        try {
-            String json = FileUtils.readFileToString(file, "utf-8");
-            BlockBean blockBean = JsonUtil.fromJson(json, BlockBean.class);
-            return blockBean.getBlockHeader().getBlockHash();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        return null;
-    }
-
-    /**
-     * 获取当前链的高度
-     *
-     * @return
-     */
-    public int getTotalBlockCount() {
-        List<File> files = getAllBolckFiles();
-        if(files!=null&files.size()>0)
-        System.out.println(files.get(files.size()-1));
-        return files.size();
-    }
-
-    /**
-     * 获取所有区块文件
-     * @return
-     */
-    public List<File> getAllBolckFiles() {
-        return (List<File>) FileUtils.listFiles(new File(getBlockPath()),null,true);
     }
 }

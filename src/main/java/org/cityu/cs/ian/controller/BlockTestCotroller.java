@@ -5,16 +5,20 @@ import org.cityu.cs.ian.model.bean.Transaction1;
 import org.cityu.cs.ian.service.Threads.IBlockAcceptService;
 import org.cityu.cs.ian.service.Threads.ITransactionService;
 import org.cityu.cs.ian.util.Constant;
+import org.cityu.cs.ian.util.PropertiesUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 
+import java.util.HashMap;
+import java.util.Map;
+
 
 @Controller
 @RequestMapping("block")
-public class BlockTestCotroller  {
+public class BlockTestCotroller {
 
     @Autowired
     private ITransactionService transactionService;
@@ -24,25 +28,36 @@ public class BlockTestCotroller  {
 
     @RequestMapping(value = "transaction", method = RequestMethod.POST)
     public String transactionAccept(@RequestBody Transaction1 transaction1) {
-       if(transactionService.verifySign(transaction1)){
-           transactionService.saveTransactionToList(transaction1);
-           return Constant.SUCCESS_RESPONSE;
-       }
-       return Constant.ERR_RESPONSE;
+        if (transactionService.verifySign(transaction1)) {
+            transactionService.saveTransactionToList(transaction1);
+            return Constant.SUCCESS_RESPONSE;
+        }
+        return Constant.ERR_RESPONSE;
     }
 
     @RequestMapping(value = "block", method = RequestMethod.POST)
-    public void acceptBlock(@RequestBody BlockBean block){
+    public Map<String, String> acceptBlock(@RequestBody BlockBean block) {
+        if (blockAcceptService.verifyBlock(block)) {
+            blockAcceptService.interruptPow();
+            boolean b = blockAcceptService.saveBlock(block);
+            if (b) {
+                return getResponseMap(true, null);
+            } else {
+                System.out.println("BlockAcceptServicee中saveBlock（）方法文件写入失败，请查看异常");
 
+                return getResponseMap(false,"文件写入失败");
+            }
+        } else {
+            return getResponseMap(false,"block验证失败");
+        }
+    }
 
-
-//        /1、验证区块（以下为验证顺序）
-//        验证blockhash
-//        验证previoushash
-//        验证mercalroot
-//        验证成功后放入链。（存成文件放入文件夹）
-//        中断正在计算的线程，并清除当前数据。
-//        重启计算线程（新的计算）
+    private Map<String, String> getResponseMap(boolean b, String errDetails) {
+        Map<String, String> backMap = new HashMap<>();
+        backMap.put("status", b ? "ok" : "err");
+        backMap.put("details", errDetails == null ? "" : errDetails);
+        backMap.put("url", PropertiesUtil.readValue("config.properties", "currentServerUrl"));
+        return backMap;
     }
 
 //    1、同步block  下载没有的blcok文件。（1提供下载接口， 2下载并保存）
